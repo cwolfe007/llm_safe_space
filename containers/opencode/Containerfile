@@ -1,0 +1,26 @@
+# Minimal OpenCode container
+# Debian-based, just the essentials for running OpenCode
+#
+# Build: podman build -t claude-code:opencode .
+
+FROM debian:bookworm-slim
+
+# Install minimal system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tmux \
+    git \
+    curl \
+    vim-tiny \
+    openssh-client \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install OpenCode
+RUN curl -fsSL https://opencode.ai/install | bash
+
+# Create workspace directory
+RUN mkdir -p /workspace
+
+WORKDIR /workspace
+
+CMD ["/bin/bash"]

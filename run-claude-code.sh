@@ -6,7 +6,7 @@
 #
 # Options:
 #   -h, --help          Show this help message
-#   -t, --tag TAG       Container flavor to use: minimal, gastown (default: minimal)
+#   -t, --tag TAG       Container flavor: minimal, gastown, opencode, opencode-gastown (default: minimal)
 #   -g, --git           Mount git credentials (~/.gitconfig and ~/.git-credentials)
 #   -s, --ssh PATHS     Mount specific SSH key files (comma-separated paths)
 #   -n, --no-build      Skip building the container image
@@ -18,6 +18,8 @@
 # Examples:
 #   ./run-claude-code.sh ~/projects/myapp              # Minimal container
 #   ./run-claude-code.sh -t gastown ~/projects/myapp   # GasTown container (gt + bd)
+#   ./run-claude-code.sh -t opencode ~/projects/myapp  # OpenCode container
+#   ./run-claude-code.sh -t opencode-gastown ~/proj    # OpenCode + GasTown
 #   ./run-claude-code.sh -g ~/projects/myapp           # Mount with git credentials
 #   ./run-claude-code.sh -s ~/.ssh/id_ed25519,~/.ssh/id_ed25519.pub ~/myapp
 #   ./run-claude-code.sh -g -s ~/.ssh/github_key,~/.ssh/github_key.pub,~/.ssh/config ~/proj
@@ -36,7 +38,7 @@ PRIVILEGED=false
 DIRS=()
 
 show_help() {
-    head -24 "$0" | tail -23 | sed 's/^# \?//'
+    head -26 "$0" | tail -25 | sed 's/^# \?//'
     echo ""
     echo "=========================================="
     echo "GIT/GITHUB CREDENTIALS INSTRUCTIONS"
@@ -74,7 +76,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         -t|--tag)
             if [ -z "$2" ] || [[ "$2" == -* ]]; then
-                echo "Error: -t/--tag requires a tag name (minimal, gastown)"
+                echo "Error: -t/--tag requires a tag name (minimal, gastown, opencode, opencode-gastown)"
                 exit 1
             fi
             CONTAINER_TAG="$2"
@@ -154,23 +156,59 @@ if [ "$PRIVILEGED" = true ]; then
     PODMAN_ARGS+=("--privileged")
 fi
 
-# Mount Anthropic credentials
-# Claude Code stores config in ~/.claude
-CLAUDE_CONFIG_DIR="$HOME/.claude"
-if [ -d "$CLAUDE_CONFIG_DIR" ]; then
-    echo "Mounting Anthropic credentials from $CLAUDE_CONFIG_DIR"
-    PODMAN_ARGS+=("-v" "$CLAUDE_CONFIG_DIR:/root/.claude:z")
-else
-    echo "Warning: $CLAUDE_CONFIG_DIR not found. You may need to run 'claude' to authenticate first."
-    echo "Creating directory for credentials..."
-    mkdir -p "$CLAUDE_CONFIG_DIR"
-    PODMAN_ARGS+=("-v" "$CLAUDE_CONFIG_DIR:/root/.claude:z")
-fi
+# Mount credentials based on container type
+if [[ "$CONTAINER_TAG" == opencode* ]]; then
+    # OpenCode stores config in ~/.config/opencode and data in ~/.local/share/opencode
+    OPENCODE_CONFIG_DIR="$HOME/.config/opencode"
+    OPENCODE_DATA_DIR="$HOME/.local/share/opencode"
 
-# Also check for ANTHROPIC_API_KEY environment variable
-if [ -n "$ANTHROPIC_API_KEY" ]; then
-    echo "Passing ANTHROPIC_API_KEY environment variable"
-    PODMAN_ARGS+=("-e" "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
+    if [ -d "$OPENCODE_CONFIG_DIR" ]; then
+        echo "Mounting OpenCode config from $OPENCODE_CONFIG_DIR"
+    else
+        echo "Creating OpenCode config directory..."
+        mkdir -p "$OPENCODE_CONFIG_DIR"
+    fi
+    PODMAN_ARGS+=("-v" "$OPENCODE_CONFIG_DIR:/root/.config/opencode:z")
+
+    if [ -d "$OPENCODE_DATA_DIR" ]; then
+        echo "Mounting OpenCode data from $OPENCODE_DATA_DIR"
+    else
+        echo "Creating OpenCode data directory..."
+        mkdir -p "$OPENCODE_DATA_DIR"
+    fi
+    PODMAN_ARGS+=("-v" "$OPENCODE_DATA_DIR:/root/.local/share/opencode:z")
+
+    # Pass common LLM API keys if set
+    if [ -n "$ANTHROPIC_API_KEY" ]; then
+        echo "Passing ANTHROPIC_API_KEY environment variable"
+        PODMAN_ARGS+=("-e" "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
+    fi
+    if [ -n "$OPENAI_API_KEY" ]; then
+        echo "Passing OPENAI_API_KEY environment variable"
+        PODMAN_ARGS+=("-e" "OPENAI_API_KEY=$OPENAI_API_KEY")
+    fi
+    if [ -n "$GEMINI_API_KEY" ]; then
+        echo "Passing GEMINI_API_KEY environment variable"
+        PODMAN_ARGS+=("-e" "GEMINI_API_KEY=$GEMINI_API_KEY")
+    fi
+else
+    # Claude Code stores config in ~/.claude
+    CLAUDE_CONFIG_DIR="$HOME/.claude"
+    if [ -d "$CLAUDE_CONFIG_DIR" ]; then
+        echo "Mounting Anthropic credentials from $CLAUDE_CONFIG_DIR"
+        PODMAN_ARGS+=("-v" "$CLAUDE_CONFIG_DIR:/root/.claude:z")
+    else
+        echo "Warning: $CLAUDE_CONFIG_DIR not found. You may need to run 'claude' to authenticate first."
+        echo "Creating directory for credentials..."
+        mkdir -p "$CLAUDE_CONFIG_DIR"
+        PODMAN_ARGS+=("-v" "$CLAUDE_CONFIG_DIR:/root/.claude:z")
+    fi
+
+    # Also check for ANTHROPIC_API_KEY environment variable
+    if [ -n "$ANTHROPIC_API_KEY" ]; then
+        echo "Passing ANTHROPIC_API_KEY environment variable"
+        PODMAN_ARGS+=("-e" "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
+    fi
 fi
 
 # Mount git credentials if requested
@@ -229,15 +267,23 @@ PODMAN_ARGS+=("$IMAGE_NAME")
 
 echo ""
 echo "=========================================="
+if [[ "$CONTAINER_TAG" == opencode* ]]; then
+echo "Starting OpenCode container ($CONTAINER_TAG)"
+else
 echo "Starting Claude Code container ($CONTAINER_TAG)"
+fi
 echo "=========================================="
 echo ""
 echo "Inside the container:"
+if [[ "$CONTAINER_TAG" == opencode* ]]; then
+echo "  - Run 'opencode' to start OpenCode"
+else
 echo "  - Run 'claude' to start Claude Code"
+fi
 echo "  - Run 'tmux' for terminal multiplexing"
 echo "  - Your mounted directories are in /workspace/"
-echo "  - You have root access - Claude can install packages, modify system, etc."
-if [ "$CONTAINER_TAG" = "gastown" ]; then
+echo "  - You have root access - install packages, modify system, etc."
+if [[ "$CONTAINER_TAG" == *gastown* ]]; then
 echo "  - GasTown tools available: 'gt' and 'bd'"
 fi
 echo ""

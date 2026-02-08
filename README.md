@@ -8,6 +8,8 @@ Run Claude Code in an isolated Podman container with root privileges, allowing i
 |-----|-----------|-----------------|
 | `minimal` (default) | `node:22-bookworm-slim` | Claude Code, tmux, git, curl, vim-tiny, openssh-client |
 | `gastown` | `node:22-bookworm` | Everything in minimal + Go, Python 3, sqlite3, `gt` (GasTown CLI), `bd` (Beads CLI) |
+| `opencode` | `debian:bookworm-slim` | OpenCode, tmux, git, curl, vim-tiny, openssh-client (no Node.js needed) |
+| `opencode-gastown` | `debian:bookworm` | Everything in opencode + Go, Python 3, sqlite3, `gt` (GasTown CLI), `bd` (Beads CLI) |
 
 ## Quick Start
 
@@ -18,15 +20,28 @@ Run Claude Code in an isolated Podman container with root privileges, allowing i
 # GasTown container with gt + bd
 ./run-claude-code.sh -t gastown ~/projects/myapp
 
+# OpenCode container
+./run-claude-code.sh -t opencode ~/projects/myapp
+
+# OpenCode + GasTown
+./run-claude-code.sh -t opencode-gastown ~/projects/myapp
+
 # Inside the container
-claude
+claude     # for minimal/gastown
+opencode   # for opencode/opencode-gastown
 ```
 
 ## Prerequisites
 
 - Podman installed
+
+**For Claude Code containers (minimal, gastown):**
 - Claude Code authenticated on your host (run `claude` once to set up `~/.claude`)
 - Or set `ANTHROPIC_API_KEY` environment variable
+
+**For OpenCode containers (opencode, opencode-gastown):**
+- Set one or more LLM API keys: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `GEMINI_API_KEY`
+- Or configure OpenCode on your host first (`~/.config/opencode/`)
 
 ## Usage
 
@@ -35,7 +50,7 @@ claude
 
 Options:
   -h, --help          Show help message with credential instructions
-  -t, --tag TAG       Container flavor: minimal, gastown (default: minimal)
+  -t, --tag TAG       Container flavor: minimal, gastown, opencode, opencode-gastown (default: minimal)
   -g, --git           Mount git credentials (~/.gitconfig and ~/.git-credentials)
   -s, --ssh PATHS     Mount specific SSH key files (comma-separated paths)
   -n, --no-build      Skip rebuilding the container image
@@ -66,6 +81,12 @@ Arguments:
 # Full setup: gastown + git + SSH + project
 ./run-claude-code.sh -t gastown -g -s ~/.ssh/id_ed25519,~/.ssh/id_ed25519.pub,~/.ssh/config ~/projects/myapp
 
+# OpenCode container
+./run-claude-code.sh -t opencode ~/projects/myapp
+
+# OpenCode + GasTown
+./run-claude-code.sh -t opencode-gastown ~/projects/myapp
+
 # Multiple project directories
 ./run-claude-code.sh ~/proj1 ~/proj2
 
@@ -81,12 +102,14 @@ Each flavor has its own build script in `containers/`:
 # Build individually
 ./containers/minimal/build.sh
 ./containers/gastown/build.sh
+./containers/opencode/build.sh
+./containers/opencode-gastown/build.sh
 
 # Or let run-claude-code.sh build automatically (default behavior)
 ./run-claude-code.sh -t gastown ~/myproject
 ```
 
-Images are tagged as `claude-code:<flavor>` (e.g. `claude-code:minimal`, `claude-code:gastown`).
+Images are tagged as `claude-code:<flavor>` (e.g. `claude-code:minimal`, `claude-code:gastown`, `claude-code:opencode`).
 
 ## Git/GitHub Credentials
 
@@ -133,14 +156,17 @@ gh auth login
 
 - **Root access**: Container runs as root inside its namespace
 - **Workspace**: Mounted directories appear in `/workspace/<dirname>`
-- **Credentials**: `~/.claude` mounted to `/root/.claude`
+- **Credentials**: `~/.claude` mounted to `/root/.claude` (Claude); `~/.config/opencode/` and `~/.local/share/opencode/` mounted for OpenCode
 - **Isolation**: Changes inside the container don't affect your host (except mounted directories)
 
 ## Inside the Container
 
 ```bash
-# Start Claude Code
+# Start Claude Code (minimal/gastown)
 claude
+
+# Start OpenCode (opencode/opencode-gastown)
+opencode
 
 # Use tmux for multiple terminals
 tmux
