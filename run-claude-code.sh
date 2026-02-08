@@ -6,6 +6,7 @@
 #
 # Options:
 #   -h, --help          Show this help message
+#   -t, --tag TAG       Container flavor to use: minimal, gastown (default: minimal)
 #   -g, --git           Mount git credentials (~/.gitconfig and ~/.git-credentials)
 #   -s, --ssh PATHS     Mount specific SSH key files (comma-separated paths)
 #   -n, --no-build      Skip building the container image
@@ -15,16 +16,16 @@
 #   directories...      Directories to mount into /workspace (space-separated)
 #
 # Examples:
-#   ./run-claude-code.sh                           # Run with just credentials
-#   ./run-claude-code.sh ~/projects/myapp          # Mount a project directory
-#   ./run-claude-code.sh -g ~/projects/myapp       # Mount with git credentials
+#   ./run-claude-code.sh ~/projects/myapp              # Minimal container
+#   ./run-claude-code.sh -t gastown ~/projects/myapp   # GasTown container (gt + bd)
+#   ./run-claude-code.sh -g ~/projects/myapp           # Mount with git credentials
 #   ./run-claude-code.sh -s ~/.ssh/id_ed25519,~/.ssh/id_ed25519.pub ~/myapp
 #   ./run-claude-code.sh -g -s ~/.ssh/github_key,~/.ssh/github_key.pub,~/.ssh/config ~/proj
 #
 
 set -e
 
-IMAGE_NAME="claude-code:go-python"
+CONTAINER_TAG="minimal"
 CONTAINER_NAME="claude-code-session"
 
 # Parse options
@@ -35,7 +36,7 @@ PRIVILEGED=false
 DIRS=()
 
 show_help() {
-    head -23 "$0" | tail -22 | sed 's/^# \?//'
+    head -24 "$0" | tail -23 | sed 's/^# \?//'
     echo ""
     echo "=========================================="
     echo "GIT/GITHUB CREDENTIALS INSTRUCTIONS"
@@ -70,6 +71,14 @@ while [[ $# -gt 0 ]]; do
         -h|--help)
             show_help
             exit 0
+            ;;
+        -t|--tag)
+            if [ -z "$2" ] || [[ "$2" == -* ]]; then
+                echo "Error: -t/--tag requires a tag name (minimal, gastown)"
+                exit 1
+            fi
+            CONTAINER_TAG="$2"
+            shift 2
             ;;
         -g|--git)
             MOUNT_GIT=true
@@ -107,10 +116,23 @@ done
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Resolve container directory and image name from tag
+CONTAINER_DIR="$SCRIPT_DIR/containers/$CONTAINER_TAG"
+IMAGE_NAME="claude-code:$CONTAINER_TAG"
+
+if [ ! -d "$CONTAINER_DIR" ]; then
+    echo "Error: unknown container tag '$CONTAINER_TAG'"
+    echo "Available tags:"
+    for d in "$SCRIPT_DIR"/containers/*/; do
+        [ -d "$d" ] && echo "  $(basename "$d")"
+    done
+    exit 1
+fi
+
 # Build the image if needed
 if [ "$SKIP_BUILD" = false ]; then
-    echo "Building Claude Code container image..."
-    podman build -t "$IMAGE_NAME" "$SCRIPT_DIR"
+    echo "Building $IMAGE_NAME ..."
+    podman build -t "$IMAGE_NAME" "$CONTAINER_DIR"
 fi
 
 # Start building the podman run command
@@ -207,7 +229,7 @@ PODMAN_ARGS+=("$IMAGE_NAME")
 
 echo ""
 echo "=========================================="
-echo "Starting Claude Code container"
+echo "Starting Claude Code container ($CONTAINER_TAG)"
 echo "=========================================="
 echo ""
 echo "Inside the container:"
@@ -215,6 +237,9 @@ echo "  - Run 'claude' to start Claude Code"
 echo "  - Run 'tmux' for terminal multiplexing"
 echo "  - Your mounted directories are in /workspace/"
 echo "  - You have root access - Claude can install packages, modify system, etc."
+if [ "$CONTAINER_TAG" = "gastown" ]; then
+echo "  - GasTown tools available: 'gt' and 'bd'"
+fi
 echo ""
 
 # Run the container

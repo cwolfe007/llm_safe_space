@@ -1,17 +1,22 @@
-# llm_safe_space
-
-Use pod man to run LLMs safely
-=======
-
 # Claude Code Podman Container
 
 Run Claude Code in an isolated Podman container with root privileges, allowing it to install packages and modify the system freely without affecting your host.
 
+## Container Flavors
+
+| Tag | Base Image | What's Included |
+|-----|-----------|-----------------|
+| `minimal` (default) | `node:22-bookworm-slim` | Claude Code, tmux, git, curl, vim-tiny, openssh-client |
+| `gastown` | `node:22-bookworm` | Everything in minimal + Go, Python 3, sqlite3, `gt` (GasTown CLI), `bd` (Beads CLI) |
+
 ## Quick Start
 
 ```bash
-# Build and run with a project directory
+# Minimal container with a project directory
 ./run-claude-code.sh ~/projects/myapp
+
+# GasTown container with gt + bd
+./run-claude-code.sh -t gastown ~/projects/myapp
 
 # Inside the container
 claude
@@ -30,9 +35,11 @@ claude
 
 Options:
   -h, --help          Show help message with credential instructions
+  -t, --tag TAG       Container flavor: minimal, gastown (default: minimal)
   -g, --git           Mount git credentials (~/.gitconfig and ~/.git-credentials)
   -s, --ssh PATHS     Mount specific SSH key files (comma-separated paths)
   -n, --no-build      Skip rebuilding the container image
+  -p, --privileged    Run container in privileged mode (use with caution)
 
 Arguments:
   directories...      Directories to mount into /workspace (space-separated)
@@ -41,11 +48,11 @@ Arguments:
 ## Examples
 
 ```bash
-# Basic - just Anthropic credentials
-./run-claude-code.sh
-
-# Mount a project directory
+# Minimal container (default)
 ./run-claude-code.sh ~/projects/myapp
+
+# GasTown container
+./run-claude-code.sh -t gastown ~/projects/myapp
 
 # With git HTTPS credentials
 ./run-claude-code.sh -g ~/projects/myapp
@@ -56,15 +63,30 @@ Arguments:
 # With SSH keys and config
 ./run-claude-code.sh -s ~/.ssh/id_ed25519,~/.ssh/id_ed25519.pub,~/.ssh/config ~/projects/myapp
 
-# Full setup: git + SSH + project
-./run-claude-code.sh -g -s ~/.ssh/id_ed25519,~/.ssh/id_ed25519.pub,~/.ssh/config ~/projects/myapp
+# Full setup: gastown + git + SSH + project
+./run-claude-code.sh -t gastown -g -s ~/.ssh/id_ed25519,~/.ssh/id_ed25519.pub,~/.ssh/config ~/projects/myapp
 
 # Multiple project directories
 ./run-claude-code.sh ~/proj1 ~/proj2
 
-# Skip rebuild if image exists
+# Skip rebuild if image already exists
 ./run-claude-code.sh -n ~/projects/myapp
 ```
+
+## Building Containers
+
+Each flavor has its own build script in `containers/`:
+
+```bash
+# Build individually
+./containers/minimal/build.sh
+./containers/gastown/build.sh
+
+# Or let run-claude-code.sh build automatically (default behavior)
+./run-claude-code.sh -t gastown ~/myproject
+```
+
+Images are tagged as `claude-code:<flavor>` (e.g. `claude-code:minimal`, `claude-code:gastown`).
 
 ## Git/GitHub Credentials
 
@@ -107,21 +129,9 @@ apt-get update && apt-get install -y gh
 gh auth login
 ```
 
-## What's Included
-
-The container includes:
-
-- Node.js 22 (Debian Bookworm)
-- Claude Code (`@anthropic-ai/claude-code`)
-- tmux
-- git
-- vim
-- curl
-- openssh-client
-
 ## Container Details
 
-- **Root access**: Container runs as root with `--privileged`
+- **Root access**: Container runs as root inside its namespace
 - **Workspace**: Mounted directories appear in `/workspace/<dirname>`
 - **Credentials**: `~/.claude` mounted to `/root/.claude`
 - **Isolation**: Changes inside the container don't affect your host (except mounted directories)
@@ -140,6 +150,10 @@ cd /workspace/myapp
 
 # Install additional tools as needed (you're root)
 apt-get update && apt-get install -y <package>
+
+# GasTown container only: multi-agent orchestration
+gt install ~/gt --git
+gt mayor attach
 ```
 
 ## Security Notes
@@ -148,12 +162,6 @@ apt-get update && apt-get install -y <package>
 - Git/SSH credentials are mounted read-only
 - The container has full root privileges inside its namespace
 - Only mount credentials you're comfortable exposing to the container
-
-## Building Manually
-
-```bash
-podman build -t claude-code .
-```
 
 ## Troubleshooting
 
