@@ -28,7 +28,7 @@
 set -e
 
 CONTAINER_TAG="minimal"
-CONTAINER_NAME="claude-code-session"
+CONTAINER_NAME="claude-code-$(date +%s)-$$"
 
 # Parse options
 MOUNT_GIT=false
