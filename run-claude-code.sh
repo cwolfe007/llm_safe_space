@@ -9,6 +9,7 @@
 #   -g, --git           Mount git credentials (~/.gitconfig and ~/.git-credentials)
 #   -s, --ssh PATHS     Mount specific SSH key files (comma-separated paths)
 #   -n, --no-build      Skip building the container image
+#   -p, --privileged    Run container in privileged mode (use with caution)
 #
 # Arguments:
 #   directories...      Directories to mount into /workspace (space-separated)
@@ -23,17 +24,18 @@
 
 set -e
 
-IMAGE_NAME="claude-code"
+IMAGE_NAME="claude-code:go-python"
 CONTAINER_NAME="claude-code-session"
 
 # Parse options
 MOUNT_GIT=false
 SSH_KEYS=()
 SKIP_BUILD=false
+PRIVILEGED=false
 DIRS=()
 
 show_help() {
-    head -22 "$0" | tail -21 | sed 's/^# \?//'
+    head -23 "$0" | tail -22 | sed 's/^# \?//'
     echo ""
     echo "=========================================="
     echo "GIT/GITHUB CREDENTIALS INSTRUCTIONS"
@@ -86,6 +88,10 @@ while [[ $# -gt 0 ]]; do
             SKIP_BUILD=true
             shift
             ;;
+        -p|--privileged)
+            PRIVILEGED=true
+            shift
+            ;;
         -*)
             echo "Unknown option: $1"
             echo "Use -h for help"
@@ -116,9 +122,15 @@ PODMAN_ARGS=(
     "--hostname" "claude-code"
     # Run as root inside the container
     "--user" "root"
-    # Give full capabilities for Claude Code to do whatever it needs
-    "--privileged"
+    # Let Claude Code know it's running in a sandbox/dev container
+    "-e" "IS_SANDBOX=1"
 )
+
+# Add privileged mode if requested
+if [ "$PRIVILEGED" = true ]; then
+    echo "Warning: Running in privileged mode - container has elevated host access"
+    PODMAN_ARGS+=("--privileged")
+fi
 
 # Mount Anthropic credentials
 # Claude Code stores config in ~/.claude
