@@ -1,7 +1,8 @@
-<<<<<<< HEAD
 # llm_safe_space
+
 Use pod man to run LLMs safely
 =======
+
 # Claude Code Podman Container
 
 Run Claude Code in an isolated Podman container with root privileges, allowing it to install packages and modify the system freely without affecting your host.
@@ -93,6 +94,7 @@ This mounts `~/.gitconfig` and `~/.git-credentials` (read-only).
 ```
 
 Files are mounted read-only to `/root/.ssh/` in the container. Use SSH URLs for git:
+
 ```bash
 git clone git@github.com:user/repo.git
 ```
@@ -108,6 +110,7 @@ gh auth login
 ## What's Included
 
 The container includes:
+
 - Node.js 22 (Debian Bookworm)
 - Claude Code (`@anthropic-ai/claude-code`)
 - tmux
@@ -155,14 +158,16 @@ podman build -t claude-code .
 ## Troubleshooting
 
 **"~/.claude not found" warning**
+
 - Run `claude` on your host first to authenticate, or
 - Set `ANTHROPIC_API_KEY` environment variable before running the script
 
 **Permission denied on mounted files**
+
 - The `:z` SELinux label is applied automatically
 - If issues persist, check your Podman/SELinux configuration
 
 **Container name conflict**
+
 - The script uses `--rm` so containers are removed on exit
 - If a container is stuck: `podman rm -f claude-code-session`
->>>>>>> 4d251d1 (start)
