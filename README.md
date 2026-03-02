@@ -7,24 +7,24 @@ Run Claude Code in an isolated Podman container with root privileges, allowing i
 | Tag | Base Image | What's Included |
 |-----|-----------|-----------------|
 | `minimal` (default) | `node:22-bookworm-slim` | Claude Code, tmux, git, curl, vim-tiny, openssh-client |
-| `gastown` | `node:22-bookworm` | Everything in minimal + Go, Python 3, sqlite3, `gt` (GasTown CLI), `bd` (Beads CLI) |
+| `gastown` | `node:22-bookworm` | Everything in minimal + Go, Python 3, sqlite3, libicu-dev, `gt` (GasTown CLI), `bd` (Beads CLI) |
 | `opencode` | `debian:bookworm-slim` | OpenCode, tmux, git, curl, vim-tiny, openssh-client (no Node.js needed) |
-| `opencode-gastown` | `debian:bookworm` | Everything in opencode + Go, Python 3, sqlite3, `gt` (GasTown CLI), `bd` (Beads CLI) |
+| `opencode-gastown` | `debian:bookworm` | Everything in opencode + Go, Python 3, sqlite3, libicu-dev, `gt` (GasTown CLI), `bd` (Beads CLI) |
 
 ## Quick Start
 
 ```bash
 # Minimal container with a project directory
-./run-claude-code.sh ~/projects/myapp
+./run-llm-cli.sh ~/projects/myapp
 
 # GasTown container with gt + bd
-./run-claude-code.sh -t gastown ~/projects/myapp
+./run-llm-cli.sh -t gastown ~/projects/myapp
 
 # OpenCode container
-./run-claude-code.sh -t opencode ~/projects/myapp
+./run-llm-cli.sh -t opencode ~/projects/myapp
 
 # OpenCode + GasTown
-./run-claude-code.sh -t opencode-gastown ~/projects/myapp
+./run-llm-cli.sh -t opencode-gastown ~/projects/myapp
 
 # Inside the container
 claude     # for minimal/gastown
@@ -46,7 +46,7 @@ opencode   # for opencode/opencode-gastown
 ## Usage
 
 ```
-./run-claude-code.sh [options] [directories...]
+./run-llm-cli.sh [options] [directories...]
 
 Options:
   -h, --help          Show help message with credential instructions
@@ -64,34 +64,34 @@ Arguments:
 
 ```bash
 # Minimal container (default)
-./run-claude-code.sh ~/projects/myapp
+./run-llm-cli.sh ~/projects/myapp
 
 # GasTown container
-./run-claude-code.sh -t gastown ~/projects/myapp
+./run-llm-cli.sh -t gastown ~/projects/myapp
 
 # With git HTTPS credentials
-./run-claude-code.sh -g ~/projects/myapp
+./run-llm-cli.sh -g ~/projects/myapp
 
 # With specific SSH keys
-./run-claude-code.sh -s ~/.ssh/id_ed25519,~/.ssh/id_ed25519.pub ~/projects/myapp
+./run-llm-cli.sh -s ~/.ssh/id_ed25519,~/.ssh/id_ed25519.pub ~/projects/myapp
 
 # With SSH keys and config
-./run-claude-code.sh -s ~/.ssh/id_ed25519,~/.ssh/id_ed25519.pub,~/.ssh/config ~/projects/myapp
+./run-llm-cli.sh -s ~/.ssh/id_ed25519,~/.ssh/id_ed25519.pub,~/.ssh/config ~/projects/myapp
 
 # Full setup: gastown + git + SSH + project
-./run-claude-code.sh -t gastown -g -s ~/.ssh/id_ed25519,~/.ssh/id_ed25519.pub,~/.ssh/config ~/projects/myapp
+./run-llm-cli.sh -t gastown -g -s ~/.ssh/id_ed25519,~/.ssh/id_ed25519.pub,~/.ssh/config ~/projects/myapp
 
 # OpenCode container
-./run-claude-code.sh -t opencode ~/projects/myapp
+./run-llm-cli.sh -t opencode ~/projects/myapp
 
 # OpenCode + GasTown
-./run-claude-code.sh -t opencode-gastown ~/projects/myapp
+./run-llm-cli.sh -t opencode-gastown ~/projects/myapp
 
 # Multiple project directories
-./run-claude-code.sh ~/proj1 ~/proj2
+./run-llm-cli.sh ~/proj1 ~/proj2
 
 # Skip rebuild if image already exists
-./run-claude-code.sh -n ~/projects/myapp
+./run-llm-cli.sh -n ~/projects/myapp
 ```
 
 ## Building Containers
@@ -105,11 +105,28 @@ Each flavor has its own build script in `containers/`:
 ./containers/opencode/build.sh
 ./containers/opencode-gastown/build.sh
 
-# Or let run-claude-code.sh build automatically (default behavior)
-./run-claude-code.sh -t gastown ~/myproject
+# Or let run-llm-cli.sh build automatically (default behavior)
+./run-llm-cli.sh -t gastown ~/myproject
 ```
 
 Images are tagged as `claude-code:<flavor>` (e.g. `claude-code:minimal`, `claude-code:gastown`, `claude-code:opencode`).
+
+**Note:** The `bd` (Beads CLI) tool is built from source rather than via `go install ...@latest` because the beads module contains `replace` directives in its `go.mod`. The gastown containers also include `libicu-dev` since beads depends on ICU for regex support.
+
+## Testing
+
+A test script builds all container flavors, runs smoke tests, and cleans up:
+
+```bash
+# Test all flavors
+./test/test-build.sh
+
+# Test specific flavors
+./test/test-build.sh minimal
+./test/test-build.sh gastown opencode
+```
+
+The script verifies that each image builds successfully, expected binaries are present, and `/workspace` exists. Test images are tagged as `claude-code-test:<flavor>` and removed after the run.
 
 ## Git/GitHub Credentials
 
@@ -123,7 +140,7 @@ git config --global credential.helper store
 git push  # or any operation requiring auth
 
 # Run container with -g flag
-./run-claude-code.sh -g ~/myproject
+./run-llm-cli.sh -g ~/myproject
 ```
 
 This mounts `~/.gitconfig` and `~/.git-credentials` (read-only).
@@ -132,10 +149,10 @@ This mounts `~/.gitconfig` and `~/.git-credentials` (read-only).
 
 ```bash
 # Specify exact files to mount (comma-separated)
-./run-claude-code.sh -s ~/.ssh/id_ed25519,~/.ssh/id_ed25519.pub ~/myproject
+./run-llm-cli.sh -s ~/.ssh/id_ed25519,~/.ssh/id_ed25519.pub ~/myproject
 
 # Include config for host aliases
-./run-claude-code.sh -s ~/.ssh/id_ed25519,~/.ssh/id_ed25519.pub,~/.ssh/config ~/myproject
+./run-llm-cli.sh -s ~/.ssh/id_ed25519,~/.ssh/id_ed25519.pub,~/.ssh/config ~/myproject
 ```
 
 Files are mounted read-only to `/root/.ssh/` in the container. Use SSH URLs for git:
