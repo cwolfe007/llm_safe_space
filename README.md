@@ -49,12 +49,14 @@ opencode   # for opencode/opencode-gastown
 ./run-llm-cli.sh [options] [directories...]
 
 Options:
-  -h, --help          Show help message with credential instructions
-  -t, --tag TAG       Container flavor: minimal, gastown, opencode, opencode-gastown (default: minimal)
-  -g, --git           Mount git credentials (~/.gitconfig and ~/.git-credentials)
-  -s, --ssh PATHS     Mount specific SSH key files (comma-separated paths)
-  -n, --no-build      Skip rebuilding the container image
-  -p, --privileged    Run container in privileged mode (use with caution)
+  -h, --help              Show help message with credential instructions
+  -t, --tag TAG           Container flavor: minimal, gastown, opencode, opencode-gastown (default: minimal)
+  -g, --git               Mount git credentials (~/.gitconfig and ~/.git-credentials)
+  --git-config "author=NAME,email=EMAIL"
+                          Set git author identity for commits inside the container
+  -s, --ssh PATHS         Mount specific SSH key files (comma-separated paths)
+  -n, --no-build          Skip rebuilding the container image
+  -p, --privileged        Run container in privileged mode (use with caution)
 
 Arguments:
   directories...      Directories to mount into /workspace (space-separated)
@@ -77,6 +79,12 @@ Arguments:
 
 # With SSH keys and config
 ./run-llm-cli.sh -s ~/.ssh/id_ed25519,~/.ssh/id_ed25519.pub,~/.ssh/config ~/projects/myapp
+
+# Use a dedicated LLM GitHub account for commits (limits permissions)
+./run-llm-cli.sh --git-config "author=llm-bot,email=llm@example.com" ~/projects/myapp
+
+# Mount host credentials but commit as a specific LLM identity
+./run-llm-cli.sh -g --git-config "author=llm-bot,email=llm@example.com" ~/projects/myapp
 
 # Full setup: gastown + git + SSH + project
 ./run-llm-cli.sh -t gastown -g -s ~/.ssh/id_ed25519,~/.ssh/id_ed25519.pub,~/.ssh/config ~/projects/myapp
@@ -115,7 +123,7 @@ Images are tagged as `claude-code:<flavor>` (e.g. `claude-code:minimal`, `claude
 
 ## Testing
 
-A test script builds all container flavors, runs smoke tests, and cleans up:
+**Container smoke tests** — builds all flavors, checks expected binaries are present, and cleans up:
 
 ```bash
 # Test all flavors
@@ -126,9 +134,27 @@ A test script builds all container flavors, runs smoke tests, and cleans up:
 ./test/test-build.sh gastown opencode
 ```
 
-The script verifies that each image builds successfully, expected binaries are present, and `/workspace` exists. Test images are tagged as `claude-code-test:<flavor>` and removed after the run.
+Test images are tagged as `claude-code-test:<flavor>` and removed after the run.
+
+**Git identity injection tests** — validates `--git-config` and `-g` flags without building containers:
+
+```bash
+./test/test-git-config.sh
+```
 
 ## Git/GitHub Credentials
+
+### Option 0: Custom Git Identity (`--git-config` flag)
+
+Set an explicit author name and email for commits made inside the container:
+
+```bash
+./run-llm-cli.sh --git-config "author=llm-bot,email=llm@example.com" ~/myproject
+```
+
+This is useful when you want commits attributed to a dedicated LLM GitHub account with restricted permissions (e.g. no branch protection bypass). It injects `GIT_AUTHOR_*` and `GIT_COMMITTER_*` environment variables, which git always respects.
+
+Can be combined with `-g` to mount host credentials for authentication while still committing as a specific identity — `--git-config` always takes precedence over the identity read from `~/.gitconfig`.
 
 ### Option 1: HTTPS with Git Credentials (`-g` flag)
 
@@ -143,7 +169,7 @@ git push  # or any operation requiring auth
 ./run-llm-cli.sh -g ~/myproject
 ```
 
-This mounts `~/.gitconfig` and `~/.git-credentials` (read-only).
+This mounts `~/.gitconfig` and `~/.git-credentials` (read-only), and also injects your host `user.name` / `user.email` as git identity env vars so commits work out of the box.
 
 ### Option 2: SSH Keys (`-s` flag)
 
