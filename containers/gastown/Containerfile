@@ -32,7 +32,7 @@ RUN apt-get update && apt-get install -y \
 # Install gt (gastown) and bd (beads) CLI tools
 # beads has replace directives in go.mod, so we must build from source
 RUN go install github.com/steveyegge/gastown/cmd/gt@v0.5.0 \
-    && git clone --branch v0.25.1 --depth 1 https://github.com/steveyegge/beads.git /tmp/beads \
+    && git clone --branch v0.44.0 --depth 1 https://github.com/steveyegge/beads.git /tmp/beads \
     && cd /tmp/beads && go build -o ${GOPATH}/bin/bd ./cmd/bd \
     && rm -rf /tmp/beads
 

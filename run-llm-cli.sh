@@ -8,6 +8,7 @@
 #   -h, --help          Show this help message
 #   -t, --tag TAG       Container flavor: minimal, gastown, opencode, opencode-gastown (default: minimal)
 #   -g, --git           Mount git credentials (~/.gitconfig and ~/.git-credentials)
+#   --git-config CFG    Set git author identity (e.g. "author=llm-bot,email=llm@example.com")
 #   -s, --ssh PATHS     Mount specific SSH key files (comma-separated paths)
 #   -n, --no-build      Skip building the container image
 #   -p, --privileged    Run container in privileged mode (use with caution)
@@ -21,6 +22,7 @@
 #   ./run-claude-code.sh -t opencode ~/projects/myapp  # OpenCode container
 #   ./run-claude-code.sh -t opencode-gastown ~/proj    # OpenCode + GasTown
 #   ./run-claude-code.sh -g ~/projects/myapp           # Mount with git credentials
+#   ./run-claude-code.sh --git-config "author=llm-bot,email=llm@example.com" ~/myapp
 #   ./run-claude-code.sh -s ~/.ssh/id_ed25519,~/.ssh/id_ed25519.pub ~/myapp
 #   ./run-claude-code.sh -g -s ~/.ssh/github_key,~/.ssh/github_key.pub,~/.ssh/config ~/proj
 #
@@ -32,6 +34,7 @@ CONTAINER_NAME="claude-code-$(date +%s)-$$"
 
 # Parse options
 MOUNT_GIT=false
+GIT_CONFIG_STR=""
 SSH_KEYS=()
 SKIP_BUILD=false
 PRIVILEGED=false
@@ -43,6 +46,12 @@ show_help() {
     echo "=========================================="
     echo "GIT/GITHUB CREDENTIALS INSTRUCTIONS"
     echo "=========================================="
+    echo ""
+    echo "Option 0: Custom Git Identity (--git-config flag)"
+    echo "  Use a specific author name and email for commits inside the container:"
+    echo "    --git-config \"author=llm-bot,email=llm@example.com\""
+    echo "  Useful for LLM-specific GitHub accounts with restricted permissions."
+    echo "  Can be combined with -g (--git-config identity takes precedence)."
     echo ""
     echo "Option 1: HTTPS with Git Credentials (-g flag)"
     echo "  1. Configure git credential storage on your host:"
@@ -85,6 +94,14 @@ while [[ $# -gt 0 ]]; do
         -g|--git)
             MOUNT_GIT=true
             shift
+            ;;
+        --git-config)
+            if [ -z "$2" ] || [[ "$2" == -* ]]; then
+                echo "Error: --git-config requires a value (e.g. \"author=llm-bot,email=llm@example.com\")"
+                exit 1
+            fi
+            GIT_CONFIG_STR="$2"
+            shift 2
             ;;
         -s|--ssh)
             if [ -z "$2" ] || [[ "$2" == -* ]]; then
@@ -226,6 +243,41 @@ if [ "$MOUNT_GIT" = true ]; then
     else
         echo "Warning: ~/.git-credentials not found (run 'git config --global credential.helper store' and authenticate once)"
     fi
+fi
+
+# Set git author identity. --git-config takes precedence over -g (host gitconfig).
+GIT_AUTHOR_NAME_VAL=""
+GIT_AUTHOR_EMAIL_VAL=""
+
+if [ -n "$GIT_CONFIG_STR" ]; then
+    # Parse "author=X,email=Y" (order-independent)
+    for pair in ${GIT_CONFIG_STR//,/ }; do
+        key="${pair%%=*}"
+        val="${pair#*=}"
+        case "$key" in
+            author) GIT_AUTHOR_NAME_VAL="$val" ;;
+            email)  GIT_AUTHOR_EMAIL_VAL="$val" ;;
+            *) echo "Warning: unknown --git-config key '$key' (expected author, email)" ;;
+        esac
+    done
+elif [ "$MOUNT_GIT" = true ]; then
+    # Fall back to host git identity
+    GIT_AUTHOR_NAME_VAL="$(git config --global user.name 2>/dev/null || true)"
+    GIT_AUTHOR_EMAIL_VAL="$(git config --global user.email 2>/dev/null || true)"
+fi
+
+if [ -n "$GIT_AUTHOR_NAME_VAL" ]; then
+    echo "Git author: $GIT_AUTHOR_NAME_VAL <$GIT_AUTHOR_EMAIL_VAL>"
+    PODMAN_ARGS+=("-e" "GIT_AUTHOR_NAME=$GIT_AUTHOR_NAME_VAL")
+    PODMAN_ARGS+=("-e" "GIT_COMMITTER_NAME=$GIT_AUTHOR_NAME_VAL")
+fi
+if [ -n "$GIT_AUTHOR_EMAIL_VAL" ]; then
+    PODMAN_ARGS+=("-e" "GIT_AUTHOR_EMAIL=$GIT_AUTHOR_EMAIL_VAL")
+    PODMAN_ARGS+=("-e" "GIT_COMMITTER_EMAIL=$GIT_AUTHOR_EMAIL_VAL")
+fi
+if { [ "$MOUNT_GIT" = true ] || [ -n "$GIT_CONFIG_STR" ]; } && \
+   { [ -z "$GIT_AUTHOR_NAME_VAL" ] || [ -z "$GIT_AUTHOR_EMAIL_VAL" ]; }; then
+    echo "Warning: git author name or email not set — commits inside container may fail"
 fi
 
 # Mount SSH keys if specified
