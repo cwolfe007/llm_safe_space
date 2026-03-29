@@ -58,6 +58,7 @@ Options:
   -n, --no-build          Skip rebuilding the container image
   -p, --privileged        Run container in privileged mode (use with caution)
   --gvisor                Run with gVisor (runsc) for stronger kernel-level isolation
+  --fuse PATH             Mount PATH via fuse-overlayfs (version-tracked; repeatable)
 
 Arguments:
   directories...      Directories to mount into /workspace (space-separated)
@@ -104,6 +105,12 @@ Arguments:
 
 # Stronger kernel-level isolation with gVisor (requires gVisor installed)
 ./run-llm-cli.sh --gvisor ~/projects/myapp
+
+# FUSE overlay mount with automatic version tracking
+./run-llm-cli.sh --fuse ~/projects/myapp
+
+# Combine: multiple fuse-mounted dirs
+./run-llm-cli.sh --fuse ~/proj1 --fuse ~/proj2
 ```
 
 ## Building Containers
@@ -235,6 +242,56 @@ gt mayor attach
 - Git/SSH credentials are mounted read-only
 - The container has full root privileges inside its namespace
 - Only mount credentials you're comfortable exposing to the container
+
+## FUSE Overlay Versioning (`--fuse`)
+
+`--fuse PATH` mounts a directory through a [fuse-overlayfs](https://github.com/containers/fuse-overlayfs) layer. The container sees the original directory unchanged, but all writes land in an isolated `upper/` layer tracked by git in `~/.llm-safe-space/`.
+
+**On container exit**, changes are automatically committed with a session timestamp. The original directory is never modified.
+
+```bash
+# First use: auto-initializes the version store, then mounts
+./run-llm-cli.sh --fuse ~/myproject
+
+# Multiple directories
+./run-llm-cli.sh --fuse ~/proj1 --fuse ~/proj2
+```
+
+### Managing Versions (`fuse-versions.sh`)
+
+```bash
+# List all tracked directories
+./fuse-versions.sh list
+
+# Show version history for a directory
+./fuse-versions.sh log ~/myproject
+
+# See what changed (uncommitted or vs a revision)
+./fuse-versions.sh diff ~/myproject
+./fuse-versions.sh diff ~/myproject HEAD~2
+
+# Show status and file listing of upper/ layer
+./fuse-versions.sh status ~/myproject
+
+# Manually commit with a message
+./fuse-versions.sh commit ~/myproject -m "implemented feature X"
+
+# Restore to a past version (must be unmounted)
+./fuse-versions.sh restore ~/myproject abc1234
+
+# Discard uncommitted changes (must be unmounted)
+./fuse-versions.sh clean ~/myproject
+```
+
+**Prerequisites**: `fuse-overlayfs` must be installed on the host.
+
+```bash
+# Debian/Ubuntu
+sudo apt-get install fuse-overlayfs
+
+# Fedora/RHEL
+sudo dnf install fuse-overlayfs
+```
 
 ### gVisor (`--gvisor`)
 

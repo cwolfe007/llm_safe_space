@@ -15,6 +15,7 @@
 #   -n, --no-build      Skip building the container image
 #   -p, --privileged    Run container in privileged mode (use with caution)
 #   --gvisor            Run container with gVisor (runsc runtime) for stronger isolation
+#   --fuse PATH         Mount PATH via fuse-overlayfs overlay (version-tracked; repeatable)
 #
 # Arguments:
 #   directories...      Directories to mount into /workspace (space-separated)
@@ -31,6 +32,7 @@
 #   ./run-claude-code.sh -s ~/.ssh/id_ed25519,~/.ssh/id_ed25519.pub ~/myapp
 #   ./run-claude-code.sh -g -s ~/.ssh/github_key,~/.ssh/github_key.pub,~/.ssh/config ~/proj
 #   ./run-claude-code.sh --gvisor ~/myapp                    # gVisor kernel-level isolation
+#   ./run-claude-code.sh --fuse ~/myapp                      # FUSE overlay with version tracking
 #
 
 set -e
@@ -40,7 +42,28 @@ CONTAINER_NAME="claude-code-$(date +%s)-$$"
 
 # Temp files created during setup; cleaned up on exit
 TMPFILES=()
-cleanup() { [ ${#TMPFILES[@]} -gt 0 ] && rm -f "${TMPFILES[@]}"; }
+FUSE_DIRS=()
+MOUNTED_FUSE_DIRS=()
+
+cleanup() {
+    # Remove temp credential files
+    [ ${#TMPFILES[@]} -gt 0 ] && rm -f "${TMPFILES[@]}"
+
+    # Auto-commit and unmount FUSE overlays (guarded: SCRIPT_DIR may not be set on early exit)
+    if [ -n "${SCRIPT_DIR:-}" ] && [ ${#MOUNTED_FUSE_DIRS[@]} -gt 0 ]; then
+        local fuse_script="$SCRIPT_DIR/fuse-versions.sh"
+        if [ -x "$fuse_script" ]; then
+            for fdir in "${MOUNTED_FUSE_DIRS[@]}"; do
+                local session_ts
+                session_ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+                echo "FUSE: committing changes for $fdir ..."
+                "$fuse_script" commit "$fdir" -m "auto-commit: session ended $session_ts" || true
+                echo "FUSE: unmounting $fdir ..."
+                "$fuse_script" umount "$fdir" || true
+            done
+        fi
+    fi
+}
 trap cleanup EXIT
 
 # Parse options
@@ -55,7 +78,7 @@ USE_GVISOR=false
 DIRS=()
 
 show_help() {
-    head -34 "$0" | tail -33 | sed 's/^# \?//'
+    head -36 "$0" | tail -35 | sed 's/^# \?//'
     echo ""
     echo "=========================================="
     echo "GIT/GITHUB CREDENTIALS INSTRUCTIONS"
@@ -162,6 +185,14 @@ while [[ $# -gt 0 ]]; do
             USE_GVISOR=true
             shift
             ;;
+        --fuse)
+            if [ -z "$2" ] || [[ "$2" == -* ]]; then
+                echo "Error: --fuse requires a directory path"
+                exit 1
+            fi
+            FUSE_DIRS+=("$2")
+            shift 2
+            ;;
         -*)
             echo "Unknown option: $1"
             echo "Use -h for help"
@@ -174,6 +205,17 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Validate fuse-overlayfs is installed when --fuse is used
+if [ ${#FUSE_DIRS[@]} -gt 0 ]; then
+    if ! command -v fuse-overlayfs &>/dev/null; then
+        echo "Error: --fuse requires fuse-overlayfs (not found in PATH)"
+        echo "Install: https://github.com/containers/fuse-overlayfs"
+        echo "  Debian/Ubuntu: sudo apt-get install fuse-overlayfs"
+        echo "  Fedora/RHEL:   sudo dnf install fuse-overlayfs"
+        exit 1
+    fi
+fi
+
 # Validate gVisor is installed if requested
 if [ "$USE_GVISOR" = true ]; then
     if ! command -v runsc &>/dev/null; then
@@ -185,6 +227,42 @@ fi
 
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Init, mount, and collect FUSE overlay volumes
+FUSE_VOLUME_ARGS=()
+if [ ${#FUSE_DIRS[@]} -gt 0 ]; then
+    FUSE_SCRIPT="$SCRIPT_DIR/fuse-versions.sh"
+    if [ ! -x "$FUSE_SCRIPT" ]; then
+        echo "Error: fuse-versions.sh not found or not executable at $FUSE_SCRIPT"
+        exit 1
+    fi
+
+    for fdir in "${FUSE_DIRS[@]}"; do
+        abs_fdir="$(cd "$fdir" 2>/dev/null && pwd)" || {
+            echo "Error: FUSE directory not found: $fdir"
+            exit 1
+        }
+
+        # Auto-init if this directory hasn't been tracked before
+        fuse_store="$HOME/.llm-safe-space/$(echo "$abs_fdir" | sha256sum | cut -c1-16)"
+        if [ ! -d "$fuse_store/.git" ]; then
+            echo "FUSE: initializing version store for $abs_fdir ..."
+            "$FUSE_SCRIPT" init "$abs_fdir"
+        fi
+
+        # Mount (idempotent — skips if already mounted)
+        "$FUSE_SCRIPT" mount "$abs_fdir"
+
+        # Track for auto-commit + umount on container exit
+        MOUNTED_FUSE_DIRS+=("$abs_fdir")
+
+        # Mount the overlay's merged view into the container
+        merged_path="$("$FUSE_SCRIPT" merged "$abs_fdir")"
+        dir_name="$(basename "$abs_fdir")"
+        echo "FUSE overlay: $merged_path -> /workspace/$dir_name"
+        FUSE_VOLUME_ARGS+=("-v" "$merged_path:/workspace/$dir_name:z")
+    done
+fi
 
 # Resolve container directory and image name from tag
 CONTAINER_DIR="$SCRIPT_DIR/containers/$CONTAINER_TAG"
@@ -396,6 +474,11 @@ if [ ${#DIRS[@]} -gt 0 ]; then
 else
     echo "No directories mounted. Use arguments to mount project directories."
     echo "Example: $0 ~/myproject"
+fi
+
+# Add FUSE overlay volumes
+if [ ${#FUSE_VOLUME_ARGS[@]} -gt 0 ]; then
+    PODMAN_ARGS+=("${FUSE_VOLUME_ARGS[@]}")
 fi
 
 # Add the image name
