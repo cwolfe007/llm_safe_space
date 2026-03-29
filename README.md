@@ -57,6 +57,7 @@ Options:
   -s, --ssh PATHS         Mount specific SSH key files (comma-separated paths)
   -n, --no-build          Skip rebuilding the container image
   -p, --privileged        Run container in privileged mode (use with caution)
+  --gvisor                Run with gVisor (runsc) for stronger kernel-level isolation
 
 Arguments:
   directories...      Directories to mount into /workspace (space-separated)
@@ -100,6 +101,9 @@ Arguments:
 
 # Skip rebuild if image already exists
 ./run-llm-cli.sh -n ~/projects/myapp
+
+# Stronger kernel-level isolation with gVisor (requires gVisor installed)
+./run-llm-cli.sh --gvisor ~/projects/myapp
 ```
 
 ## Building Containers
@@ -231,6 +235,19 @@ gt mayor attach
 - Git/SSH credentials are mounted read-only
 - The container has full root privileges inside its namespace
 - Only mount credentials you're comfortable exposing to the container
+
+### gVisor (`--gvisor`)
+
+[gVisor](https://gvisor.dev) adds an extra layer of isolation by intercepting syscalls in user space rather than passing them directly to the host kernel. This limits the blast radius of a container escape.
+
+```bash
+# Requires gVisor installed on the host (runsc in PATH)
+./run-llm-cli.sh --gvisor ~/myproject
+```
+
+Install gVisor: https://gvisor.dev/docs/user_guide/install/
+
+Note: gVisor has a performance overhead and some syscalls may not be supported. Incompatible with `--privileged`.
 
 ## Troubleshooting
 

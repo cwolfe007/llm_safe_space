@@ -48,8 +48,24 @@ capture_podman_args() {
     tmpbin="$(mktemp -d)"
     args_file="$(mktemp)"
 
-    # Fake podman: record args, never actually run containers
-    printf '#!/bin/bash\necho "$*" >> "%s"\n' "$args_file" > "$tmpbin/podman"
+    # Fake podman: record args and dump content of any mounted credential files
+    cat > "$tmpbin/podman" <<PODMAN_EOF
+#!/bin/bash
+echo "\$*" >> "$args_file"
+# Dump content of any mounted .git-credentials or .gitconfig so tests can inspect them
+args=("\$@")
+for i in "\${!args[@]}"; do
+    arg="\${args[\$i]}"
+    if [[ "\$arg" == *":/root/.git-credentials:"* ]]; then
+        src="\${arg%%:*}"
+        echo "CREDS_CONTENT:\$(cat "\$src")" >> "$args_file"
+    fi
+    if [[ "\$arg" == *":/root/.gitconfig:"* ]]; then
+        src="\${arg%%:*}"
+        echo "GITCFG_CONTENT:\$(cat "\$src")" >> "$args_file"
+    fi
+done
+PODMAN_EOF
     chmod +x "$tmpbin/podman"
 
     # Fake git: return controlled user.name / user.email values when requested
@@ -122,6 +138,30 @@ args=$(capture_podman_args \
     -- --no-build -g --git-config "author=llm-bot,email=llm@example.com")
 assert_contains     "custom identity used"  "GIT_AUTHOR_NAME=llm-bot"   "$args"
 assert_not_contains "host identity absent"  "GIT_AUTHOR_NAME=Host User" "$args"
+
+# ---------------------------------------------------------------------------
+log "--git-token plain token uses x-access-token and github.com"
+args=$(capture_podman_args -- --no-build --git-token "ghp_testtoken123")
+assert_contains "credentials file mounted"  "/root/.git-credentials"                      "$args"
+assert_contains "gitconfig injected"        "/root/.gitconfig"                             "$args"
+assert_contains "correct credentials entry" "CREDS_CONTENT:https://x-access-token:ghp_testtoken123@github.com" "$args"
+assert_contains "credential.helper in cfg"  "GITCFG_CONTENT:[credential]"                 "$args"
+
+# ---------------------------------------------------------------------------
+log "--git-token user:token format splits username"
+args=$(capture_podman_args -- --no-build --git-token "myuser:mytoken")
+assert_contains "correct user in creds" "CREDS_CONTENT:https://myuser:mytoken@github.com" "$args"
+
+# ---------------------------------------------------------------------------
+log "--git-host changes the target host"
+args=$(capture_podman_args -- --no-build --git-token "mytoken" --git-host "gitlab.com")
+assert_contains "host in creds" "CREDS_CONTENT:https://x-access-token:mytoken@gitlab.com" "$args"
+
+# ---------------------------------------------------------------------------
+log "--git-token with -g does not inject a second gitconfig"
+args=$(capture_podman_args -- --no-build -g --git-token "ghp_testtoken123")
+assert_contains     "credentials file still mounted" "/root/.git-credentials"  "$args"
+assert_not_contains "no injected minimal gitconfig"  "GITCFG_CONTENT"          "$args"
 
 # ---------------------------------------------------------------------------
 log "no git flags = no GIT_AUTHOR_* vars injected"

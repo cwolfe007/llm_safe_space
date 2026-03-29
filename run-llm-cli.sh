@@ -9,9 +9,12 @@
 #   -t, --tag TAG       Container flavor: minimal, gastown, opencode, opencode-gastown (default: minimal)
 #   -g, --git           Mount git credentials (~/.gitconfig and ~/.git-credentials)
 #   --git-config CFG    Set git author identity (e.g. "author=llm-bot,email=llm@example.com")
+#   --git-token TOKEN   HTTPS token for git auth; TOKEN may be plain or "user:token"
+#   --git-host HOST     Git host for --git-token (default: github.com)
 #   -s, --ssh PATHS     Mount specific SSH key files (comma-separated paths)
 #   -n, --no-build      Skip building the container image
 #   -p, --privileged    Run container in privileged mode (use with caution)
+#   --gvisor            Run container with gVisor (runsc runtime) for stronger isolation
 #
 # Arguments:
 #   directories...      Directories to mount into /workspace (space-separated)
@@ -23,8 +26,11 @@
 #   ./run-claude-code.sh -t opencode-gastown ~/proj    # OpenCode + GasTown
 #   ./run-claude-code.sh -g ~/projects/myapp           # Mount with git credentials
 #   ./run-claude-code.sh --git-config "author=llm-bot,email=llm@example.com" ~/myapp
+#   ./run-claude-code.sh --git-token ghp_mytoken ~/myapp
+#   ./run-claude-code.sh --git-token myuser:mytoken --git-host gitlab.com ~/myapp
 #   ./run-claude-code.sh -s ~/.ssh/id_ed25519,~/.ssh/id_ed25519.pub ~/myapp
 #   ./run-claude-code.sh -g -s ~/.ssh/github_key,~/.ssh/github_key.pub,~/.ssh/config ~/proj
+#   ./run-claude-code.sh --gvisor ~/myapp                    # gVisor kernel-level isolation
 #
 
 set -e
@@ -32,16 +38,24 @@ set -e
 CONTAINER_TAG="minimal"
 CONTAINER_NAME="claude-code-$(date +%s)-$$"
 
+# Temp files created during setup; cleaned up on exit
+TMPFILES=()
+cleanup() { [ ${#TMPFILES[@]} -gt 0 ] && rm -f "${TMPFILES[@]}"; }
+trap cleanup EXIT
+
 # Parse options
 MOUNT_GIT=false
 GIT_CONFIG_STR=""
+GIT_TOKEN=""
+GIT_TOKEN_HOST="github.com"
 SSH_KEYS=()
 SKIP_BUILD=false
 PRIVILEGED=false
+USE_GVISOR=false
 DIRS=()
 
 show_help() {
-    head -26 "$0" | tail -25 | sed 's/^# \?//'
+    head -34 "$0" | tail -33 | sed 's/^# \?//'
     echo ""
     echo "=========================================="
     echo "GIT/GITHUB CREDENTIALS INSTRUCTIONS"
@@ -58,6 +72,14 @@ show_help() {
     echo "     git config --global credential.helper store"
     echo "  2. Run any git operation that requires auth to cache credentials"
     echo "  3. Run this script with -g flag to mount ~/.gitconfig and ~/.git-credentials"
+    echo ""
+    echo "Option 1b: HTTPS Token (--git-token flag)"
+    echo "  Pass a Personal Access Token (PAT) or similar HTTPS credential directly:"
+    echo "    --git-token ghp_yourtoken                  # GitHub, user defaults to x-access-token"
+    echo "    --git-token myuser:ghp_yourtoken           # explicit username"
+    echo "    --git-token mytoken --git-host gitlab.com  # non-GitHub provider"
+    echo "  A temporary credentials file is created for the session and deleted on exit."
+    echo "  Can be combined with -g (token file takes precedence for that host)."
     echo ""
     echo "Option 2: SSH Keys (-s flag with specific paths)"
     echo "  1. Specify exact SSH files to mount (comma-separated):"
@@ -103,6 +125,22 @@ while [[ $# -gt 0 ]]; do
             GIT_CONFIG_STR="$2"
             shift 2
             ;;
+        --git-token)
+            if [ -z "$2" ] || [[ "$2" == -* ]]; then
+                echo "Error: --git-token requires a token (e.g. ghp_mytoken or myuser:mytoken)"
+                exit 1
+            fi
+            GIT_TOKEN="$2"
+            shift 2
+            ;;
+        --git-host)
+            if [ -z "$2" ] || [[ "$2" == -* ]]; then
+                echo "Error: --git-host requires a hostname (e.g. gitlab.com)"
+                exit 1
+            fi
+            GIT_TOKEN_HOST="$2"
+            shift 2
+            ;;
         -s|--ssh)
             if [ -z "$2" ] || [[ "$2" == -* ]]; then
                 echo "Error: -s/--ssh requires comma-separated paths"
@@ -120,6 +158,10 @@ while [[ $# -gt 0 ]]; do
             PRIVILEGED=true
             shift
             ;;
+        --gvisor)
+            USE_GVISOR=true
+            shift
+            ;;
         -*)
             echo "Unknown option: $1"
             echo "Use -h for help"
@@ -131,6 +173,15 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Validate gVisor is installed if requested
+if [ "$USE_GVISOR" = true ]; then
+    if ! command -v runsc &>/dev/null; then
+        echo "Error: --gvisor requires gVisor to be installed (runsc not found in PATH)"
+        echo "Install gVisor: https://gvisor.dev/docs/user_guide/install/"
+        exit 1
+    fi
+fi
 
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -171,6 +222,12 @@ PODMAN_ARGS=(
 if [ "$PRIVILEGED" = true ]; then
     echo "Warning: Running in privileged mode - container has elevated host access"
     PODMAN_ARGS+=("--privileged")
+fi
+
+# Use gVisor runtime if requested
+if [ "$USE_GVISOR" = true ]; then
+    echo "Using gVisor runtime (runsc) for enhanced isolation"
+    PODMAN_ARGS+=("--runtime" "runsc")
 fi
 
 # Mount credentials based on container type
@@ -242,6 +299,33 @@ if [ "$MOUNT_GIT" = true ]; then
         PODMAN_ARGS+=("-v" "$HOME/.git-credentials:/root/.git-credentials:ro,z")
     else
         echo "Warning: ~/.git-credentials not found (run 'git config --global credential.helper store' and authenticate once)"
+    fi
+fi
+
+# Set up HTTPS token credentials if requested
+if [ -n "$GIT_TOKEN" ]; then
+    # Support "user:token" format; default username for plain tokens is x-access-token
+    if [[ "$GIT_TOKEN" == *:* ]]; then
+        GIT_TOKEN_USER="${GIT_TOKEN%%:*}"
+        GIT_TOKEN_SECRET="${GIT_TOKEN#*:}"
+    else
+        GIT_TOKEN_USER="x-access-token"
+        GIT_TOKEN_SECRET="$GIT_TOKEN"
+    fi
+
+    GIT_CREDS_TMP="$(mktemp)"
+    TMPFILES+=("$GIT_CREDS_TMP")
+    chmod 600 "$GIT_CREDS_TMP"
+    printf 'https://%s:%s@%s\n' "$GIT_TOKEN_USER" "$GIT_TOKEN_SECRET" "$GIT_TOKEN_HOST" > "$GIT_CREDS_TMP"
+    echo "Git HTTPS token configured for $GIT_TOKEN_HOST (user: $GIT_TOKEN_USER)"
+    PODMAN_ARGS+=("-v" "$GIT_CREDS_TMP:/root/.git-credentials:ro,z")
+
+    # If -g wasn't used we also need a gitconfig that enables the credential store helper
+    if [ "$MOUNT_GIT" = false ]; then
+        GIT_CFG_TMP="$(mktemp)"
+        TMPFILES+=("$GIT_CFG_TMP")
+        printf '[credential]\n\thelper = store\n' > "$GIT_CFG_TMP"
+        PODMAN_ARGS+=("-v" "$GIT_CFG_TMP:/root/.gitconfig:ro,z")
     fi
 fi
 
